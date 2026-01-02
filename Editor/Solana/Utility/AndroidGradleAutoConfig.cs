@@ -80,10 +80,10 @@ namespace Solana.Unity.SDK.Editor
                         modified = true;
                     }
                     else
-+                   {
-+                       Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block in mainTemplate.gradle. " +
-+                                        "Dependencies were not injected. Please add them manually.");
-+                   }
+                    {
+                        Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block in mainTemplate.gradle. " +
+                                            "Dependencies were not injected. Please add them manually.");
+                    }
                 }
 
                 //Add Conflict Resolution (Duplicate Class errors)
@@ -126,14 +126,18 @@ configurations.all {
                 if (File.Exists(GradleTemplatePath))
                 {
                     string backupPath = GradleTemplatePath + ".bak";
-                    File.Copy(GradleTemplatePath, backupPath, true);
+                    //Preserve original backup if it already exists
+                    if (!File.Exists(backupPath))
+                    {
+                        File.Copy(GradleTemplatePath, backupPath, false);
+                    }
                 }
             }
             catch (System.Exception e)
-+            {
-+                // Best effort backup - log warning but don't fail the build
-+                Debug.LogWarning($"[Solana SDK] Could not create backup of mainTemplate.gradle: {e.Message}");
-+            }
+            {
+                // Best effort backup - log warning but don't fail the build
+                Debug.LogWarning($"[Solana SDK] Could not create backup of mainTemplate.gradle: {e.Message}");
+            }
         }
     }
 }

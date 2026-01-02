@@ -92,6 +92,7 @@ The SDK is also available on the [Unity Asset Store](https://assetstore.unity.co
 6. Create new Canvas
 7. Import WalletHolder prefab into the Canvas or if you want your design just import wallet prefab and customize the scene.
 
+
 ## 📱 Android Build Setup
 To avoid "Duplicate Class" or "Dependency Conflict" errors when building for Android, you must enable the Custom Main Gradle Template.
 

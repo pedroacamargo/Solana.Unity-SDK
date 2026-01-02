@@ -11,40 +11,41 @@ namespace Solana.Unity.SDK.Editor
     {
         public int callbackOrder => 0;
         private const string GradleTemplatePath = "Assets/Plugins/Android/mainTemplate.gradle";
+        private const string DependencyMarker = "// [Solana.Unity-SDK] Dependencies";
+        private const string ResolutionMarker = "// [Solana.Unity-SDK] Conflict Resolution";
 
         //Run on Editor Load to warn the user immediately if setup is missing
         [InitializeOnLoadMethod]
         private static void OnEditorLoad()
         {
-            EditorApplication.delayCall += CheckConfiguration;
+            EditorApplication.delayCall += () => CheckConfiguration(true);
         }
 
         //Menu Item for manual execution
         [MenuItem("Solana/Fix Android Dependencies")]
         public static void RunManualCheck()
         {
-            CheckConfiguration();
+            CheckConfiguration(true);
         }
 
         //Run right before the build starts to ensure we don't fail midway
         public void OnPreprocessBuild(BuildReport report)
         {
             if (report.summary.platform != BuildTarget.Android) return;
-            CheckConfiguration();
+            CheckConfiguration(false);
         }
 
-        private static void CheckConfiguration()
+        private static void CheckConfiguration(bool checkActiveTarget)
         {
-            if (EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android) return;
+            if (checkActiveTarget && EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android) return;
 
             //Check if the user has enabled the Custom Gradle Template
             if (!File.Exists(GradleTemplatePath))
             {
-                //Inform the user to enable the Custom Gradle Template
                 Debug.LogError("[Solana SDK] Android Build Setup Required!\n" +
-                               "1. Go to: Edit > Project Settings > Player > Android (Robot Icon) > Publishing Settings\n" +
+                               "1. Go to: Edit -> Project Settings -> Player -> Android -> Publishing Settings\n" +
                                "2. Check the box: 'Custom Main Gradle Template'\n" +
-                               "3. Then try Building again or click 'Solana > Fix Android Dependencies'.");
+                               "3. Then try Building again or click 'Solana -> Fix Android Dependencies'.");
                 return;
             }
 
@@ -60,10 +61,13 @@ namespace Solana.Unity.SDK.Editor
                 bool modified = false;
 
                 //Add Missing Dependencies
-                if (!content.Contains("androidx.browser:browser") || !content.Contains("listenablefuture"))
+                if (!content.Contains(DependencyMarker))
                 {
+                    //Create a backup before modifying
+                    CreateBackup();
+
                     string newDeps = @"
-    // Solana SDK Dependencies
+    " + DependencyMarker + @"
     implementation 'androidx.browser:browser:1.5.0'
     implementation 'androidx.versionedparcelable:versionedparcelable:1.1.1'
     implementation 'com.google.guava:guava:31.1-android'
@@ -78,9 +82,13 @@ namespace Solana.Unity.SDK.Editor
                 }
 
                 //Add Conflict Resolution (Duplicate Class errors)
-                if (!content.Contains("exclude group: 'com.google.guava'"))
+                if (!content.Contains(ResolutionMarker))
                 {
+                    if (!modified) CreateBackup(); //Creating backup if we haven't yet
+
                     string resolutionBlock = @"
+
+" + ResolutionMarker + @"
 configurations.all {
     resolutionStrategy {
         exclude group: 'com.google.guava', module: 'listenablefuture'
@@ -89,7 +97,7 @@ configurations.all {
 }
 ";
                     //Append to the end of the file
-                    content += "\n" + resolutionBlock;
+                    content = content.TrimEnd() + resolutionBlock;
                     modified = true;
                 }
 
@@ -104,6 +112,19 @@ configurations.all {
             {
                 Debug.LogError($"[Solana SDK] Failed to patch mainTemplate.gradle: {e.Message}");
             }
+        }
+
+        private static void CreateBackup()
+        {
+            try
+            {
+                if (File.Exists(GradleTemplatePath))
+                {
+                    string backupPath = GradleTemplatePath + ".bak";
+                    File.Copy(GradleTemplatePath, backupPath, true);
+                }
+            }
+            catch { /* Best effort backup, don't fail the build if this fails */ }
         }
     }
 }

@@ -79,6 +79,11 @@ namespace Solana.Unity.SDK.Editor
                         content = regex.Replace(content, "dependencies {\n" + newDeps, 1);
                         modified = true;
                     }
+                    else
++                   {
++                       Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block in mainTemplate.gradle. " +
++                                        "Dependencies were not injected. Please add them manually.");
++                   }
                 }
 
                 //Add Conflict Resolution (Duplicate Class errors)
@@ -124,7 +129,11 @@ configurations.all {
                     File.Copy(GradleTemplatePath, backupPath, true);
                 }
             }
-            catch { /* Best effort backup, don't fail the build if this fails */ }
+            catch (System.Exception e)
++            {
++                // Best effort backup - log warning but don't fail the build
++                Debug.LogWarning($"[Solana SDK] Could not create backup of mainTemplate.gradle: {e.Message}");
++            }
         }
     }
 }

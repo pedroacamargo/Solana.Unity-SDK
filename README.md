@@ -92,6 +92,15 @@ The SDK is also available on the [Unity Asset Store](https://assetstore.unity.co
 6. Create new Canvas
 7. Import WalletHolder prefab into the Canvas or if you want your design just import wallet prefab and customize the scene.
 
+## 📱 Android Build Setup
+To avoid "Duplicate Class" or "Dependency Conflict" errors when building for Android, you must enable the Custom Main Gradle Template.
+
+1. Go to **Edit** > **Project Settings** > **Player**.
+2. Select the **Android** tab.
+3. Scroll down to **Publishing Settings**.
+4. Check the box **Custom Main Gradle Template**.
+
+Once checked, the Solana SDK will automatically detect the generated `Assets/Plugins/Android/mainTemplate.gradle` file and inject the necessary dependency fixes (handling AndroidX and Guava conflicts) the next time you build or reload the editor.
 
 ## 💚 Open Source
 Open Source is at the heart of what we do at Magicblock. We believe building software in the open, with thriving communities, helps leave the world a little better than we found it.

@@ -68,9 +68,9 @@ namespace Solana.Unity.SDK.Editor
 
                     string newDeps = @"
     " + DependencyMarker + @"
-    implementation 'androidx.browser:browser:1.5.0'
+    implementation 'androidx.browser:browser:1.8.0'
     implementation 'androidx.versionedparcelable:versionedparcelable:1.1.1'
-    implementation 'com.google.guava:guava:31.1-android'
+    implementation 'com.google.guava:guava:33.0.0-android'
     implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
 ";
                     var regex = new Regex(@"dependencies\s*\{");
@@ -97,7 +97,7 @@ namespace Solana.Unity.SDK.Editor
 configurations.all {
     resolutionStrategy {
         exclude group: 'com.google.guava', module: 'listenablefuture'
-        force 'androidx.core:core:1.9.0'
+        force 'androidx.core:core:1.13.0'
     }
 }
 ";

@@ -15,12 +15,20 @@ namespace Solana.Unity.SDK.Editor
         //Markers to identify our injections
         private const string DependencyMarker = "// [Solana.Unity-SDK] Dependencies";
         private const string ResolutionMarker = "// [Solana.Unity-SDK] Conflict Resolution";
+        private const string SessionKey = "SolanaGradleChecked";
 
         //Run on Editor Load to warn the user immediately if setup is missing
         [InitializeOnLoadMethod]
         private static void OnEditorLoad()
         {
-            EditorApplication.delayCall += () => CheckConfiguration(true);
+            // PERFORMANCE FIX: Only run this check once per Editor Session to avoid overhead on every reload.
+            if (SessionState.GetBool(SessionKey, false)) return;
+            
+            EditorApplication.delayCall += () => 
+            {
+                CheckConfiguration(true);
+                SessionState.SetBool(SessionKey, true);
+            };
         }
 
         //Menu Item for manual execution
@@ -76,7 +84,7 @@ namespace Solana.Unity.SDK.Editor
                 string coreVersion = "1.8.0";
 #endif
 
-                // Explicit androidx.core dependency
+                //Explicit androidx.core dependency
                 string newDepsBlock = $@"
     {DependencyMarker}
     implementation 'androidx.browser:browser:{browserVersion}'
@@ -99,7 +107,7 @@ configurations.all {{
 
                 bool modified = false;
 
-                //SANITIZE: Removing any existing/old Solana injections to prevent duplicates or version mismatch
+                //SANITIZE: Remove any existing/old Solana injections to prevent duplicates or version mismatch
                 if (content.Contains(DependencyMarker))
                 {
                    //We check for the explicit Core version. If it doesn't match, we are in a Dirty/Upgrade state.
@@ -107,12 +115,19 @@ configurations.all {{
                                          
                    if (!hasCorrectDeps)
                    {
-                       //If we found the marker but NOT the correct versions, we must Create Backup and Nuke the old entries.
+                       //Verify sanitization actually works before proceeding
                        CreateBackup();
                        
                        //Regex to strip old Solana Dependency Block (matches marker --> last known lib)
                        var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}[\s\S]*?com\.google\.guava:listenablefuture[^\n]*");
-                       content = depsRegex.Replace(content, "");
+                       string sanitized = depsRegex.Replace(content, "");
+                       
+                       if (sanitized == content)
+                       {
+                           Debug.LogWarning("[Solana SDK] Could not remove old dependency block (unexpected format). Please manually delete the old Solana dependencies in mainTemplate.gradle.");
+                           return; //Stop here to prevent injecting duplicates
+                       }
+                       content = sanitized;
                        
                        if (content.Contains(ResolutionMarker))
                        {
@@ -120,6 +135,10 @@ configurations.all {{
                            if (resIndex > 0) 
                            {
                                content = content.Substring(0, resIndex).TrimEnd();
+                           }
+                           else
+                           {
+                               Debug.LogWarning("[Solana SDK] Found resolution marker but could not locate it for removal.");
                            }
                        }
                        
@@ -132,7 +151,7 @@ configurations.all {{
                 //Inject Dependencies
                 if (!content.Contains(DependencyMarker)) 
                 {
-                    if (!modified) CreateBackup(); //Backup if we haven't yet
+                    if (!modified) CreateBackup(); 
                     
                     var regex = new Regex(@"dependencies\s*\{");
                     if (regex.IsMatch(content))

@@ -21,7 +21,7 @@ namespace Solana.Unity.SDK.Editor
         [InitializeOnLoadMethod]
         private static void OnEditorLoad()
         {
-            // PERFORMANCE FIX: Only run this check once per Editor Session to avoid overhead on every reload.
+            //Only run this check once per Editor Session to avoid overhead on every reload.
             if (SessionState.GetBool(SessionKey, false)) return;
             
             EditorApplication.delayCall += () => 
@@ -111,7 +111,10 @@ configurations.all {{
                 if (content.Contains(DependencyMarker))
                 {
                    //We check for the explicit Core version. If it doesn't match, we are in a Dirty/Upgrade state.
-                   bool hasCorrectDeps = content.Contains($"implementation 'androidx.core:core:{coreVersion}'");
+                   bool hasCorrectDeps = content.Contains($"implementation 'androidx.core:core:{coreVersion}'") &&
+                                         content.Contains($"implementation 'androidx.browser:browser:{browserVersion}'") &&
+                                         content.Contains($"implementation 'androidx.versionedparcelable:versionedparcelable:{parcelableVersion}'") &&
+                                         content.Contains($"implementation 'com.google.guava:guava:{guavaVersion}'");
                                          
                    if (!hasCorrectDeps)
                    {

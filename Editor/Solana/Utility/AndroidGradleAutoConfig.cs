@@ -98,6 +98,10 @@ configurations.all {
     resolutionStrategy {
         exclude group: 'com.google.guava', module: 'listenablefuture'
         force 'androidx.core:core:1.17.0'
+        // Fix for Unity 2022 Kotlin conflicts
+        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
     }
 }
 ";

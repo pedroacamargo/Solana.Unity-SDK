@@ -60,17 +60,33 @@ namespace Solana.Unity.SDK.Editor
                 string content = File.ReadAllText(GradleTemplatePath);
                 bool modified = false;
 
-                //Add Missing Dependencies
+                //--- ADAPTIVE VERSIONING ---
+                //Unity 6+ gets modern stable versions (fixes Duplicate Class errors)
+                //Unity 2022/2021 gets legacy versions (matches original SDK AARs, avoids Kotlin conflicts)
+#if UNITY_6000_0_OR_NEWER
+                string browserVersion = "1.9.0";
+                string parcelableVersion = "1.2.1";
+                string guavaVersion = "33.5.0-android";
+                string coreVersion = "1.17.0";
+#else
+                //Legacy versions for Unity 2022/2021 to ensure stability with older Gradle/Kotlin plugins
+                string browserVersion = "1.5.0";
+                string parcelableVersion = "1.1.1";
+                string guavaVersion = "31.1-android";
+                string coreVersion = "1.8.0";
+#endif
+
+                //Dependency Injection
                 if (!content.Contains(DependencyMarker))
                 {
                     //Create a backup before modifying
                     CreateBackup();
 
-                    string newDeps = @"
-    " + DependencyMarker + @"
-    implementation 'androidx.browser:browser:1.9.0'
-    implementation 'androidx.versionedparcelable:versionedparcelable:1.2.1'
-    implementation 'com.google.guava:guava:33.5.0-android'
+                    string newDeps = $@"
+    {DependencyMarker}
+    implementation 'androidx.browser:browser:{browserVersion}'
+    implementation 'androidx.versionedparcelable:versionedparcelable:{parcelableVersion}'
+    implementation 'com.google.guava:guava:{guavaVersion}'
     implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
 ";
                     var regex = new Regex(@"dependencies\s*\{");
@@ -82,28 +98,24 @@ namespace Solana.Unity.SDK.Editor
                     else
                     {
                         Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block in mainTemplate.gradle. " +
-                                            "Dependencies were not injected. Please add them manually.");
+                                         "Dependencies were not injected. Please add them manually.");
                     }
                 }
 
-                //Add Conflict Resolution (Duplicate Class errors)
+                //Conflict Resolution (Duplicate Class errors)
                 if (!content.Contains(ResolutionMarker))
                 {
                     if (!modified) CreateBackup(); //Creating backup if we haven't yet
 
-                    string resolutionBlock = @"
+                    string resolutionBlock = $@"
 
-" + ResolutionMarker + @"
-configurations.all {
-    resolutionStrategy {
+{ResolutionMarker}
+configurations.all {{
+    resolutionStrategy {{
         exclude group: 'com.google.guava', module: 'listenablefuture'
-        force 'androidx.core:core:1.17.0'
-        // Fix for Unity 2022 Kotlin conflicts
-        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
-        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
-        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
-    }
-}
+        force 'androidx.core:core:{coreVersion}'
+    }}
+}}
 ";
                     //Append to the end of the file
                     content = content.TrimEnd() + resolutionBlock;
@@ -114,7 +126,7 @@ configurations.all {
                 {
                     File.WriteAllText(GradleTemplatePath, content);
                     AssetDatabase.Refresh();
-                    Debug.Log("[Solana SDK] Successfully patched 'mainTemplate.gradle' with dependency fixes.");
+                    Debug.Log($"[Solana SDK] Successfully patched 'mainTemplate.gradle' with dependency fixes (Core v{coreVersion}).");
                 }
             }
             catch (System.Exception e)

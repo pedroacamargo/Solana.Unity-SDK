@@ -135,13 +135,9 @@ configurations.all {{
                        if (content.Contains(ResolutionMarker))
                        {
                            int resIndex = content.LastIndexOf(ResolutionMarker);
-                           if (resIndex > 0) 
+                           if (resIndex >= 0) 
                            {
                                content = content.Substring(0, resIndex).TrimEnd();
-                           }
-                           else
-                           {
-                               Debug.LogWarning("[Solana SDK] Found resolution marker but could not locate it for removal.");
                            }
                        }
                        
@@ -185,7 +181,7 @@ configurations.all {{
             }
             catch (System.Exception e)
             {
-                Debug.LogError($"[Solana SDK] Failed to patch mainTemplate.gradle: {e.Message}");
+                Debug.LogError($"[Solana SDK] Failed to patch mainTemplate.gradle: {e.Message}\n{e.StackTrace}");
             }
         }
 

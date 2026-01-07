@@ -11,6 +11,8 @@ namespace Solana.Unity.SDK.Editor
     {
         public int callbackOrder => 0;
         private const string GradleTemplatePath = "Assets/Plugins/Android/mainTemplate.gradle";
+        
+        //Markers to identify our injections
         private const string DependencyMarker = "// [Solana.Unity-SDK] Dependencies";
         private const string ResolutionMarker = "// [Solana.Unity-SDK] Conflict Resolution";
 
@@ -58,56 +60,33 @@ namespace Solana.Unity.SDK.Editor
             try
             {
                 string content = File.ReadAllText(GradleTemplatePath);
-                bool modified = false;
-
+                
                 //--- ADAPTIVE VERSIONING ---
-                //Unity 6+ gets modern stable versions (fixes Duplicate Class errors)
-                //Unity 2022/2021 gets legacy versions (matches original SDK AARs, avoids Kotlin conflicts)
 #if UNITY_6000_0_OR_NEWER
+                //Unity 6+ (Modern Stable)
                 string browserVersion = "1.9.0";
                 string parcelableVersion = "1.2.1";
                 string guavaVersion = "33.5.0-android";
                 string coreVersion = "1.17.0";
 #else
-                //Legacy versions for Unity 2022/2021 to ensure stability with older Gradle/Kotlin plugins
+                //Unity 2022/2021 (Legacy Stable to avoid Kotlin conflicts)
                 string browserVersion = "1.5.0";
                 string parcelableVersion = "1.1.1";
                 string guavaVersion = "31.1-android";
                 string coreVersion = "1.8.0";
 #endif
 
-                //Dependency Injection
-                if (!content.Contains(DependencyMarker))
-                {
-                    //Create a backup before modifying
-                    CreateBackup();
-
-                    string newDeps = $@"
+                // Explicit androidx.core dependency
+                string newDepsBlock = $@"
     {DependencyMarker}
     implementation 'androidx.browser:browser:{browserVersion}'
+    implementation 'androidx.core:core:{coreVersion}'
     implementation 'androidx.versionedparcelable:versionedparcelable:{parcelableVersion}'
     implementation 'com.google.guava:guava:{guavaVersion}'
     implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
 ";
-                    var regex = new Regex(@"dependencies\s*\{");
-                    if (regex.IsMatch(content))
-                    {
-                        content = regex.Replace(content, "dependencies {\n" + newDeps, 1);
-                        modified = true;
-                    }
-                    else
-                    {
-                        Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block in mainTemplate.gradle. " +
-                                         "Dependencies were not injected. Please add them manually.");
-                    }
-                }
 
-                //Conflict Resolution (Duplicate Class errors)
-                if (!content.Contains(ResolutionMarker))
-                {
-                    if (!modified) CreateBackup(); //Creating backup if we haven't yet
-
-                    string resolutionBlock = $@"
+                string newResolutionBlock = $@"
 
 {ResolutionMarker}
 configurations.all {{
@@ -117,8 +96,61 @@ configurations.all {{
     }}
 }}
 ";
-                    //Append to the end of the file
-                    content = content.TrimEnd() + resolutionBlock;
+
+                bool modified = false;
+
+                //SANITIZE: Removing any existing/old Solana injections to prevent duplicates or version mismatch
+                if (content.Contains(DependencyMarker))
+                {
+                   //We check for the explicit Core version. If it doesn't match, we are in a Dirty/Upgrade state.
+                   bool hasCorrectDeps = content.Contains($"implementation 'androidx.core:core:{coreVersion}'");
+                                         
+                   if (!hasCorrectDeps)
+                   {
+                       //If we found the marker but NOT the correct versions, we must Create Backup and Nuke the old entries.
+                       CreateBackup();
+                       
+                       //Regex to strip old Solana Dependency Block (matches marker --> last known lib)
+                       var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}[\s\S]*?com\.google\.guava:listenablefuture[^\n]*");
+                       content = depsRegex.Replace(content, "");
+                       
+                       if (content.Contains(ResolutionMarker))
+                       {
+                           int resIndex = content.LastIndexOf(ResolutionMarker);
+                           if (resIndex > 0) 
+                           {
+                               content = content.Substring(0, resIndex).TrimEnd();
+                           }
+                       }
+                       
+                       modified = true;
+                   }
+                }
+
+                //INJECT: Now that we are clean, inject the correct blocks
+                
+                //Inject Dependencies
+                if (!content.Contains(DependencyMarker)) 
+                {
+                    if (!modified) CreateBackup(); //Backup if we haven't yet
+                    
+                    var regex = new Regex(@"dependencies\s*\{");
+                    if (regex.IsMatch(content))
+                    {
+                        content = regex.Replace(content, "dependencies {\n" + newDepsBlock, 1);
+                        modified = true;
+                    }
+                    else
+                    {
+                        Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block. Auto-setup skipped.");
+                    }
+                }
+
+                //Inject Resolution Strategy
+                if (!content.Contains(ResolutionMarker))
+                {
+                    if (!modified) CreateBackup();
+                    content = content.TrimEnd() + newResolutionBlock;
                     modified = true;
                 }
 
@@ -126,7 +158,7 @@ configurations.all {{
                 {
                     File.WriteAllText(GradleTemplatePath, content);
                     AssetDatabase.Refresh();
-                    Debug.Log($"[Solana SDK] Successfully patched 'mainTemplate.gradle' with dependency fixes (Core v{coreVersion}).");
+                    Debug.Log($"[Solana SDK] Updated 'mainTemplate.gradle' dependencies (Target: Core v{coreVersion}).");
                 }
             }
             catch (System.Exception e)
@@ -142,7 +174,6 @@ configurations.all {{
                 if (File.Exists(GradleTemplatePath))
                 {
                     string backupPath = GradleTemplatePath + ".bak";
-                    //Preserve original backup if it already exists
                     if (!File.Exists(backupPath))
                     {
                         File.Copy(GradleTemplatePath, backupPath, false);
@@ -151,8 +182,7 @@ configurations.all {{
             }
             catch (System.Exception e)
             {
-                // Best effort backup - log warning but don't fail the build
-                Debug.LogWarning($"[Solana SDK] Could not create backup of mainTemplate.gradle: {e.Message}");
+                Debug.LogWarning($"[Solana SDK] Backup failed: {e.Message}");
             }
         }
     }

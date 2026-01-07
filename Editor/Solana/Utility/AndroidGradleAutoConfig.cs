@@ -161,6 +161,7 @@ configurations.all {{
                     else
                     {
                         Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block. Auto-setup skipped.");
+                        return; //Stop here to avoid partial configuration
                     }
                 }
 

@@ -230,7 +230,7 @@ configurations.all {{
                         //Ensure temp file is cleaned up even if Replace/Move fails
                         if (File.Exists(tempPath)) 
                         {
-                            try { File.Delete(tempPath); } catch {} 
+                            try { File.Delete(tempPath); } catch (System.Exception ex) { Debug.LogWarning($"[Solana SDK] Failed to cleanup temp file: {ex.Message}"); } 
                         }
                     }
                     
@@ -377,7 +377,7 @@ configurations.all {{
                                               .Skip(10);
                     foreach (var old in oldBackups)
                     {
-                        try { File.Delete(old); } catch {}
+                        try { File.Delete(old); } catch (System.Exception ex) { Debug.LogWarning($"[Solana SDK] Failed to delete old backup {old}: {ex.Message}"); }
                     }
                     Debug.Log($"[Solana SDK] Created backup: {backupPath}");
                 }

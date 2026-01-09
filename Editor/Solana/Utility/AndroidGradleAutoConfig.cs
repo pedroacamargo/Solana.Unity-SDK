@@ -86,7 +86,7 @@ namespace Solana.Unity.SDK.Editor
                 string guavaVersion = "33.5.0-android";
                 string coreVersion = "1.13.1";
 
-                //Force Kotlin 1.8.22 and exclude redundant jdk7/jdk8 modules (they're included in kotlin-stdlib 1.8+)
+                //Force Kotlin 1.8.22 and exclude redundant modules
                 string kotlinResolutionBlock = @"
         force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'";
                 string kotlinExcludeBlock = @"
@@ -130,29 +130,29 @@ configurations.all {{
                 //Sanitize and Validate
                 if (content.Contains(DependencyMarker) || content.Contains(ResolutionMarker))
                 {
-                   //Validate Dependencies
-                   bool hasCorrectDeps = Regex.IsMatch(content, $@"force\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]") &&
-                                (string.IsNullOrEmpty(kotlinCheckRegex) || Regex.IsMatch(content, kotlinCheckRegex));
-                   
-                   //Validate Resolution Strategy (Check if it forces the correct Core version)
-                   bool hasCorrectResolution = content.Contains(ResolutionMarker) && 
-                                               Regex.IsMatch(content, $@"force\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]");
-                                         
-                   //If either is wrong, we must regenerate
-                   if (!hasCorrectDeps || !hasCorrectResolution)
-                   {
-                       if (!CreateBackup()) return false;
-                       
-                       //Remove Old Dependencies
-                       var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s*(?:implementation|//).+)*");
-                       string sanitized = depsRegex.Replace(content, "");
-                       content = sanitized;
-                       
-                       //Remove Old Resolution Block
-                       content = RemoveResolutionBlock(content);
-                       
-                       modified = true;
-                   }
+                    //Validate Dependencies (Must look for 'implementation')
+                    bool hasCorrectDeps = Regex.IsMatch(content, $@"implementation\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]");
+                    
+                    //Validate Resolution Strategy (Must look for 'force' AND Kotlin fix)
+                    bool hasCorrectResolution = content.Contains(ResolutionMarker) && 
+                                                Regex.IsMatch(content, $@"force\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]") &&
+                                                (string.IsNullOrEmpty(kotlinCheckRegex) || Regex.IsMatch(content, kotlinCheckRegex));
+                                        
+                    //If either is wrong, we must regenerate
+                    if (!hasCorrectDeps || !hasCorrectResolution)
+                    {
+                        if (!CreateBackup()) return false;
+                        
+                        //Remove Old Dependencies
+                        var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s*(?:implementation|//).+)*");
+                        string sanitized = depsRegex.Replace(content, "");
+                        content = sanitized;
+                        
+                        //Remove Old Resolution Block
+                        content = RemoveResolutionBlock(content);
+                        
+                        modified = true;
+                    }
                 }
                 
                 //Inject Dependencies
@@ -218,8 +218,46 @@ configurations.all {{
             }
         }
 
+        private static bool ShouldSkipForComment(string content, ref int i, ref bool inLineComment, ref bool inBlockComment)
+        {
+            char c = content[i];
+
+            //Check for line comment start (//)
+            if (!inLineComment && !inBlockComment && c == '/' && i + 1 < content.Length && content[i+1] == '/')
+            {
+                inLineComment = true;
+                i++;
+                return true;
+            }
+            
+            //Check for line comment end (New Line)
+            if (inLineComment && (c == '\n' || c == '\r'))
+            {
+                inLineComment = false;
+                return true;
+            }
+            
+            //Check for block comment start (/*)
+            if (!inBlockComment && !inLineComment && c == '/' && i + 1 < content.Length && content[i+1] == '*')
+            {
+                inBlockComment = true;
+                i++;
+                return true;
+            }
+            
+            //Check for block comment end (*/)
+            if (inBlockComment && c == '*' && i + 1 < content.Length && content[i+1] == '/')
+            {
+                inBlockComment = false;
+                i++;
+                return true;
+            }
+
+            return inLineComment || inBlockComment;
+        }
+
         //Removes the resolution block by counting braces
-        private static string RemoveResolutionBlock(string content)
+       private static string RemoveResolutionBlock(string content)
         {
             int markerIndex = content.IndexOf(ResolutionMarker);
             if (markerIndex < 0) return content;
@@ -232,28 +270,14 @@ configurations.all {{
             int depth = 0;
             int closeBraceIndex = -1;
             bool inLineComment = false;
+            bool inBlockComment = false;
 
             //Scan forward to find matching closing brace
             for (int i = openBraceIndex; i < content.Length; i++)
             {
+                if (ShouldSkipForComment(content, ref i, ref inLineComment, ref inBlockComment)) continue;
+
                 char c = content[i];
-
-                //Handle Comments
-                if (!inLineComment && c == '/' && i + 1 < content.Length && content[i+1] == '/')
-                {
-                    inLineComment = true;
-                    i++; 
-                    continue;
-
-                }
-                if (inLineComment && (c == '\n' || c == '\r'))
-                {
-                    inLineComment = false;
-                    continue;
-                }
-                if (inLineComment) continue;
-
-                //Handle Braces
                 if (c == '{') depth++;
                 else if (c == '}') depth--;
 
@@ -281,21 +305,9 @@ configurations.all {{
 
             for (int i = 0; i < content.Length; i++)
             {
-                char c = content[i];
-                
-                if (!inLineComment && c == '/' && i + 1 < content.Length && content[i+1] == '/')
-                {
-                    inLineComment = true;
-                    i++;
-                    continue;
-                }
-                if (inLineComment && (c == '\n' || c == '\r'))
-                {
-                    inLineComment = false;
-                    continue;
-                }
-                if (inLineComment) continue;
+                if (ShouldSkipForComment(content, ref i, ref inLineComment, ref inBlockComment)) continue;
 
+                char c = content[i];
                 if (c == '{') depth++;
                 else if (c == '}') depth--;
                 

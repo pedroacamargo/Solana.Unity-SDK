@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Linq;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
@@ -43,36 +44,31 @@ namespace Solana.Unity.SDK.Editor
         public void OnPreprocessBuild(BuildReport report)
         {
             if (report.summary.platform != BuildTarget.Android) return;
-            CheckConfiguration(false);
+            if (!CheckConfiguration(false))
+            {
+                throw new BuildFailedException("[Solana SDK] Android Gradle configuration failed. See console for details.");
+            }
         }
 
-        private static void CheckConfiguration(bool checkActiveTarget)
+        private static bool CheckConfiguration(bool checkActiveTarget)
         {
-            if (checkActiveTarget && EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android) return;
+            if (checkActiveTarget && EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android) return true;
 
             //Check if Custom Gradle Template is actually enabled in Project Settings
-#if UNITY_2019_3_OR_NEWER
-            if (!PlayerSettings.Android.useCustomMainGradleTemplate)
+            if (!File.Exists(GradleTemplatePath))
             {
-                Debug.LogError("[Solana SDK] Android Build Setup Required!\n" +
+                Debug.LogError($"[Solana SDK] 'mainTemplate.gradle' not found at {GradleTemplatePath}.\n" +
                                "1. Go to: Edit -> Project Settings -> Player -> Android -> Publishing Settings\n" +
                                "2. Check the box: 'Custom Main Gradle Template'\n" +
                                "3. Then try Building again or click 'Solana -> Fix Android Dependencies'.");
-                return;
-            }
-#endif
-
-            if (!File.Exists(GradleTemplatePath))
-            {
-                Debug.LogError($"[Solana SDK] 'mainTemplate.gradle' not found at {GradleTemplatePath}. Please generate it first.");
-                return;
+                return false;
             }
 
             //If the file exists, ensure dependencies are correct
-            PatchGradleFile();
+            return PatchGradleFile();
         }
 
-        private static void PatchGradleFile()
+        private static bool PatchGradleFile()
         {
             try
             {
@@ -127,8 +123,7 @@ configurations.all {{
                 if (content.Contains(DependencyMarker) || content.Contains(ResolutionMarker))
                 {
                    //Validate Dependencies
-                   bool hasCorrectDeps = Regex.IsMatch(content, $@"implementation\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]") &&
-                                         Regex.IsMatch(content, $@"implementation\s+['""]androidx\.browser:browser:{Regex.Escape(browserVersion)}['""]");
+                   bool hasCorrectDeps = Regex.IsMatch(content, $@"implementation\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]");
                    
                    //Validate Resolution Strategy (Check if it forces the correct Core version)
                    bool hasCorrectResolution = content.Contains(ResolutionMarker) && 
@@ -137,22 +132,15 @@ configurations.all {{
                    //If either is wrong, we must regenerate
                    if (!hasCorrectDeps || !hasCorrectResolution)
                    {
-                       if (!CreateBackup()) return;
+                       if (!CreateBackup()) return false;
                        
                        //Remove Old Dependencies
                        var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s+implementation\s+['""][^'""]+['""]\s*)*");
                        string sanitized = depsRegex.Replace(content, "");
-                       
-                       if (sanitized == content && content.Contains(DependencyMarker))
-                       {
-                           Debug.LogWarning("[Solana SDK] Could not remove old dependency block. Please manually clean mainTemplate.gradle.");
-                           return; 
-                       }
                        content = sanitized;
                        
                        //Remove Old Resolution Block
-                       var resRegex = new Regex($@"\s*{Regex.Escape(ResolutionMarker)}[\s\S]*?configurations\.all\s*\{{[\s\S]*?\}}\s*\}}");
-                       content = resRegex.Replace(content, "");
+                       content = RemoveResolutionBlock(content);
                        
                        modified = true;
                    }
@@ -161,7 +149,7 @@ configurations.all {{
                 //Inject Dependencies
                 if (!content.Contains(DependencyMarker)) 
                 {
-                    if (!modified) { if(!CreateBackup()) return; } 
+                    if (!modified) { if(!CreateBackup()) return false; } 
                     
                     var regex = new Regex(@"(?m)^\s*dependencies\s*\{");
                     if (regex.IsMatch(content))
@@ -171,8 +159,8 @@ configurations.all {{
                     }
                     else
                     {
-                        Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block. Auto-setup skipped.");
-                        return; //Stop here to avoid partial configuration
+                        Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block in mainTemplate.gradle.");
+                        return false; //Stop here to avoid partial configuration
                     }
                 }
 
@@ -181,7 +169,7 @@ configurations.all {{
                 {
                     if (!modified)
                     {
-                        if(!CreateBackup()) return;
+                        if(!CreateBackup()) return false;
                     } 
                     content = content.TrimEnd() + newResolutionBlock;
                     modified = true;
@@ -189,15 +177,78 @@ configurations.all {{
 
                 if (modified)
                 {
-                    File.WriteAllText(GradleTemplatePath, content);
+                    //Validate syntax before writing
+                    if (!ValidateBraces(content))
+                    {
+                        Debug.LogError("[Solana SDK] Configuration aborted: Generated gradle content has unbalanced braces. Check the template.");
+                        return false;
+                    }
+
+                    //Atomic Write
+                    string tempPath = GradleTemplatePath + ".tmp";
+                    File.WriteAllText(tempPath, content);
+                    
+                    if (File.Exists(GradleTemplatePath)) File.Delete(GradleTemplatePath);
+                    File.Move(tempPath, GradleTemplatePath);
                     AssetDatabase.Refresh();
                     Debug.Log($"[Solana SDK] Updated 'mainTemplate.gradle' dependencies (Target: Core v{coreVersion}).");
                 }
+                return true;
             }
             catch (System.Exception e)
             {
                 Debug.LogError($"[Solana SDK] Failed to patch mainTemplate.gradle: {e.Message}\n{e.StackTrace}");
+                return false;
             }
+        }
+
+        //Removes the resolution block by counting braces
+        private static string RemoveResolutionBlock(string content)
+        {
+            int markerIndex = content.IndexOf(ResolutionMarker);
+            if (markerIndex < 0) return content;
+
+            // Find start of configurations.all block
+            var configMatch = Regex.Match(content.Substring(markerIndex), @"configurations\.all\s*\{");
+            if (!configMatch.Success) return content;
+
+            int openBraceIndex = markerIndex + configMatch.Index + configMatch.Length - 1;
+            int depth = 0;
+            int closeBraceIndex = -1;
+
+            // Scan forward to find matching closing brace
+            for (int i = openBraceIndex; i < content.Length; i++)
+            {
+                if (content[i] == '{') depth++;
+                else if (content[i] == '}') depth--;
+
+                if (depth == 0)
+                {
+                    closeBraceIndex = i;
+                    break;
+                }
+            }
+
+            if (closeBraceIndex > 0)
+            {
+                //Remove from marker up to closing brace
+                return content.Remove(markerIndex, (closeBraceIndex - markerIndex) + 1);
+            }
+
+            return content;
+        }
+
+        //Simple check to ensure the file isn't broken
+        private static bool ValidateBraces(string content)
+        {
+            int depth = 0;
+            foreach (char c in content)
+            {
+                if (c == '{') depth++;
+                else if (c == '}') depth--;
+                if (depth < 0) return false;
+            }
+            return depth == 0;
         }
 
         private static bool CreateBackup()
@@ -215,7 +266,16 @@ configurations.all {{
                     string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
                     string backupPath = Path.Combine(backupDir, $"mainTemplate.gradle.{timestamp}.bak");
                     
-                    File.Copy(GradleTemplatePath, backupPath, false);
+                    File.Copy(GradleTemplatePath, backupPath, true);
+                    
+                    //Keep only last 10 backups
+                    var oldBackups = Directory.GetFiles(backupDir, "mainTemplate.gradle.*.bak")
+                                              .OrderByDescending(f => f)
+                                              .Skip(10);
+                    foreach (var old in oldBackups)
+                    {
+                        try { File.Delete(old); } catch {}
+                    }
                     Debug.Log($"[Solana SDK] Created backup: {backupPath}");
                 }
                 return true;

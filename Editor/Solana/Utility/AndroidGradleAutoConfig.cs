@@ -81,7 +81,7 @@ namespace Solana.Unity.SDK.Editor
                 Debug.LogError($"[Solana SDK] 'mainTemplate.gradle' not found at {GradleTemplatePath}.\n" +
                                "1. Go to: Edit -> Project Settings -> Player -> Android -> Publishing Settings\n" +
                                "2. Check the box: 'Custom Main Gradle Template'\n" +
-                               "3. Then try Building again or click 'Solana/Fix Android Dependencies (Force)'.");
+                               "3. Then try Building again or click 'Solana/Fix Android Dependencies'.");
                 return false;
             }
 
@@ -172,10 +172,10 @@ configurations.all {{
                 {
                     if (!modified) { if(!CreateBackup()) return false; } 
                     
-                    var regex = new Regex(@"(?m)^\s*dependencies\s*\{");
+                    var regex = new Regex(@"(?m)^(?<indent>\s*)dependencies\s*\{");
                     if (regex.IsMatch(content))
                     {
-                        content = regex.Replace(content, "dependencies {\n" + newDepsBlock, 1);
+                        content = regex.Replace(content, m => $"{m.Groups["indent"].Value}dependencies {{\n{newDepsBlock}", 1);
                         modified = true;
                     }
                     else
@@ -272,8 +272,16 @@ configurations.all {{
                 {
                     if (c == stringChar)
                     {
-                        //Check for escape (e.g. \")
-                        bool isEscaped = (i > 0 && content[i - 1] == '\\');
+                        //Count consecutive backslashes to handle cases like "\\" correctly.
+                        int backslashCount = 0;
+                        int j = i - 1;
+                        while (j >= 0 && content[j] == '\\')
+                        {
+                            backslashCount++;
+                            j--;
+                        }
+                        bool isEscaped = (backslashCount % 2) == 1;
+                        
                         if (!isEscaped) inString = false;
                     }
                     return true; 

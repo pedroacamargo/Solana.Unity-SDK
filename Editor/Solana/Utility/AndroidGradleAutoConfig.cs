@@ -26,6 +26,7 @@ namespace Solana.Unity.SDK.Editor
             
             EditorApplication.delayCall += () => 
             {
+                //schedule check for next frame to avoid blocking editor initialization
                 CheckConfiguration(true);
                 SessionState.SetBool(SessionKey, true);
             };
@@ -72,10 +73,16 @@ namespace Solana.Unity.SDK.Editor
                 //--- ADAPTIVE VERSIONING ---
 #if UNITY_6000_0_OR_NEWER
                 //Unity 6+ (Modern Stable)
-                string browserVersion = "1.9.0";
+                string browserVersion = "1.8.0";
                 string parcelableVersion = "1.2.1";
                 string guavaVersion = "33.5.0-android";
-                string coreVersion = "1.17.0";
+                string coreVersion = "1.15.0";
+
+                //force Kotlin 1.8.22 on Unity 6 to resolve duplicate class errors.
+                string kotlinResolutionBlock = @"
+        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'";
 #else
                 //Unity 2022/2021 (Legacy Stable to avoid Kotlin conflicts)
                 string browserVersion = "1.5.0";
@@ -111,10 +118,10 @@ configurations.all {{
                 if (content.Contains(DependencyMarker))
                 {
                    //We check for the explicit Core version. If it doesn't match, we are in a Dirty/Upgrade state.
-                   bool hasCorrectDeps = content.Contains($"implementation 'androidx.core:core:{coreVersion}'") &&
-                                         content.Contains($"implementation 'androidx.browser:browser:{browserVersion}'") &&
-                                         content.Contains($"implementation 'androidx.versionedparcelable:versionedparcelable:{parcelableVersion}'") &&
-                                         content.Contains($"implementation 'com.google.guava:guava:{guavaVersion}'");
+                   bool hasCorrectDeps = Regex.IsMatch(content, $@"implementation\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]") &&
+                                         Regex.IsMatch(content, $@"implementation\s+['""]androidx\.browser:browser:{Regex.Escape(browserVersion)}['""]") &&
+                                         Regex.IsMatch(content, $@"implementation\s+['""]androidx\.versionedparcelable:versionedparcelable:{Regex.Escape(parcelableVersion)}['""]") &&
+                                         Regex.IsMatch(content, $@"implementation\s+['""]com\.google\.guava:guava:{Regex.Escape(guavaVersion)}['""]");
                                          
                    if (!hasCorrectDeps)
                    {
@@ -122,7 +129,7 @@ configurations.all {{
                        if(!CreateBackup()) return;
                        
                        //Regex to strip old Solana Dependency Block (matches marker through consecutive implementation lines)
-                       var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s+implementation\s+'[^']+'\s*)+");
+                       var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s+implementation\s+['""][^'""]+['""]\s*)*");
                        string sanitized = depsRegex.Replace(content, "");
                        
                        if (sanitized == content)
@@ -196,11 +203,12 @@ configurations.all {{
             {
                 if (File.Exists(GradleTemplatePath))
                 {
-                    string backupPath = GradleTemplatePath + ".bak";
-                    if (!File.Exists(backupPath))
-                    {
-                        File.Copy(GradleTemplatePath, backupPath, false);
-                    }
+                    //using timestamped backups to prevent overwriting previous states
+                    string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    string backupPath = $"{GradleTemplatePath}.{timestamp}.bak";
+                    
+                    File.Copy(GradleTemplatePath, backupPath, false);
+                    Debug.Log($"[Solana SDK] Created backup: {backupPath}");
                 }
                 return true;
             }

@@ -364,6 +364,8 @@ configurations.all {{
             }
 
             //Handle Comments
+            //Note: We increment 'i' here to consume the second character of the token (e.g. '/' or '*').
+            //The caller's loop will then increment 'i' again, effectively skipping the whole token.
             if (!inString && !inLineComment && !inBlockComment && c == '/' && i + 1 < content.Length && content[i+1] == '/')
             {
                 inLineComment = true; i++; return true;

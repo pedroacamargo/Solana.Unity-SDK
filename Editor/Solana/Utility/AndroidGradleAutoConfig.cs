@@ -50,13 +50,21 @@ namespace Solana.Unity.SDK.Editor
         {
             if (checkActiveTarget && EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android) return;
 
-            //Check if the user has enabled the Custom Gradle Template
-            if (!File.Exists(GradleTemplatePath))
+            //Check if Custom Gradle Template is actually enabled in Project Settings
+#if UNITY_2019_3_OR_NEWER
+            if (!PlayerSettings.Android.useCustomMainGradleTemplate)
             {
                 Debug.LogError("[Solana SDK] Android Build Setup Required!\n" +
                                "1. Go to: Edit -> Project Settings -> Player -> Android -> Publishing Settings\n" +
                                "2. Check the box: 'Custom Main Gradle Template'\n" +
                                "3. Then try Building again or click 'Solana -> Fix Android Dependencies'.");
+                return;
+            }
+#endif
+
+            if (!File.Exists(GradleTemplatePath))
+            {
+                Debug.LogError($"[Solana SDK] 'mainTemplate.gradle' not found at {GradleTemplatePath}. Please generate it first.");
                 return;
             }
 
@@ -84,11 +92,13 @@ namespace Solana.Unity.SDK.Editor
         force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
         force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'";
 #else
-                //Unity 2022/2021 (Legacy Stable to avoid Kotlin conflicts)
+                //Unity 2022/2021 (Legacy Stable)
                 string browserVersion = "1.5.0";
                 string parcelableVersion = "1.1.1";
                 string guavaVersion = "31.1-android";
                 string coreVersion = "1.8.0";
+
+                string kotlinResolutionBlock = ""; //Empty on legacy versions
 #endif
 
                 //Explicit androidx.core dependency
@@ -107,60 +117,54 @@ namespace Solana.Unity.SDK.Editor
 configurations.all {{
     exclude group: 'com.google.guava', module: 'listenablefuture'
     resolutionStrategy {{
-        force 'androidx.core:core:{coreVersion}'
+        force 'androidx.core:core:{coreVersion}'{kotlinResolutionBlock}
     }}
 }}
 ";
 
                 bool modified = false;
 
-                //SANITIZE: Remove any existing/old Solana injections to prevent duplicates or version mismatch
-                if (content.Contains(DependencyMarker))
+                //Sanatize and Validate
+                if (content.Contains(DependencyMarker) || content.Contains(ResolutionMarker))
                 {
-                   //We check for the explicit Core version. If it doesn't match, we are in a Dirty/Upgrade state.
+                   //Validate Dependencies
                    bool hasCorrectDeps = Regex.IsMatch(content, $@"implementation\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]") &&
-                                         Regex.IsMatch(content, $@"implementation\s+['""]androidx\.browser:browser:{Regex.Escape(browserVersion)}['""]") &&
-                                         Regex.IsMatch(content, $@"implementation\s+['""]androidx\.versionedparcelable:versionedparcelable:{Regex.Escape(parcelableVersion)}['""]") &&
-                                         Regex.IsMatch(content, $@"implementation\s+['""]com\.google\.guava:guava:{Regex.Escape(guavaVersion)}['""]");
+                                         Regex.IsMatch(content, $@"implementation\s+['""]androidx\.browser:browser:{Regex.Escape(browserVersion)}['""]");
+                   
+                   //Validate Resolution Strategy (Check if it forces the correct Core version)
+                   bool hasCorrectResolution = content.Contains(ResolutionMarker) && 
+                                               Regex.IsMatch(content, $@"force\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]");
                                          
-                   if (!hasCorrectDeps)
+                   //If either is wrong, we must regenerate
+                   if (!hasCorrectDeps || !hasCorrectResolution)
                    {
-                       //Verify sanitization actually works before proceeding
-                       if(!CreateBackup()) return;
+                       if (!CreateBackup()) return;
                        
-                       //Regex to strip old Solana Dependency Block (matches marker through consecutive implementation lines)
+                       //Remove Old Dependencies
                        var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s+implementation\s+['""][^'""]+['""]\s*)*");
                        string sanitized = depsRegex.Replace(content, "");
                        
-                       if (sanitized == content)
+                       if (sanitized == content && content.Contains(DependencyMarker))
                        {
-                           Debug.LogWarning("[Solana SDK] Could not remove old dependency block (unexpected format). Please manually delete the old Solana dependencies in mainTemplate.gradle.");
-                           return; //Stop here to prevent injecting duplicates
+                           Debug.LogWarning("[Solana SDK] Could not remove old dependency block. Please manually clean mainTemplate.gradle.");
+                           return; 
                        }
                        content = sanitized;
                        
-                       if (content.Contains(ResolutionMarker))
-                       {
-                           //Match the resolution block from marker to closing braces
-                          var resRegex = new Regex($@"\s*{Regex.Escape(ResolutionMarker)}[\s\S]*?configurations\.all\s*\{{[\s\S]*?\}}\s*\}}");
-                          content = resRegex.Replace(content, "");
-                       }
+                       //Remove Old Resolution Block
+                       var resRegex = new Regex($@"\s*{Regex.Escape(ResolutionMarker)}[\s\S]*?configurations\.all\s*\{{[\s\S]*?\}}\s*\}}");
+                       content = resRegex.Replace(content, "");
                        
                        modified = true;
                    }
                 }
-
-                //INJECT: Now that we are clean, inject the correct blocks
                 
                 //Inject Dependencies
                 if (!content.Contains(DependencyMarker)) 
                 {
-                    if (!modified)
-                    {
-                        if(!CreateBackup()) return;
-                    } 
+                    if (!modified) { if(!CreateBackup()) return; } 
                     
-                    var regex = new Regex(@"dependencies\s*\{");
+                    var regex = new Regex(@"(?m)^\s*dependencies\s*\{");
                     if (regex.IsMatch(content))
                     {
                         content = regex.Replace(content, "dependencies {\n" + newDepsBlock, 1);
@@ -203,9 +207,14 @@ configurations.all {{
             {
                 if (File.Exists(GradleTemplatePath))
                 {
+                    //Creating backups in Library/ to avoid polluting Assets/
+                    string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+                    string backupDir = Path.Combine(projectRoot, "Library", "SolanaSdk", "GradleBackups");
+                    Directory.CreateDirectory(backupDir);
+
                     //using timestamped backups to prevent overwriting previous states
                     string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                    string backupPath = $"{GradleTemplatePath}.{timestamp}.bak";
+                    string backupPath = Path.Combine(backupDir, $"mainTemplate.gradle.{timestamp}.bak");
                     
                     File.Copy(GradleTemplatePath, backupPath, false);
                     Debug.Log($"[Solana SDK] Created backup: {backupPath}");
@@ -214,7 +223,7 @@ configurations.all {{
             }
             catch (System.Exception e)
             {
-                Debug.LogWarning($"[Solana SDK] Backup failed: {e.Message}, aborting auto config to protect original file");
+                Debug.LogWarning($"[Solana SDK] Backup failed: {e.Message}, Aborting");
                 return false;
             }
         }

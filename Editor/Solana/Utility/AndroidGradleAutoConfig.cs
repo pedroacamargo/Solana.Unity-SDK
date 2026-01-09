@@ -47,6 +47,13 @@ namespace Solana.Unity.SDK.Editor
             if (SessionState.GetBool(SessionKey, false)) return;
             SessionState.SetBool(SessionKey, true);
             
+            //Re-check if user switches build target to Android later
+            EditorUserBuildSettings.activeBuildTargetChanged += () =>
+            {
+                if (EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android)
+                    CheckConfiguration(true);
+            };
+
             EditorApplication.delayCall += () => 
             {
                 //schedule check for next frame to avoid blocking editor initialization
@@ -174,16 +181,32 @@ configurations.all {{
                 {
                     if (!modified) { if(!CreateBackup()) return false; } 
                     
-                    var regex = new Regex(@"(?m)^(?<indent>\s*)dependencies\s*\{");
-                    if (regex.IsMatch(content))
+                    //Prioritize Unity's DEPS placeholder
+                    //This prevents injecting into the wrong block
+                    var depsPlaceholder = new Regex(@"(?m)^(?<indent>\s*)\*\*DEPS\*\*\s*$");
+                    if (depsPlaceholder.IsMatch(content))
                     {
-                        content = regex.Replace(content, m => $"{m.Groups["indent"].Value}dependencies {{\n{newDepsBlock}", 1);
+                        content = depsPlaceholder.Replace(
+                            content,
+                            m => $"{newDepsBlock}{m.Groups["indent"].Value}**DEPS**",
+                            1
+                        );
                         modified = true;
                     }
                     else
                     {
-                        Debug.LogWarning("[Solana SDK] Could not find 'dependencies' block in mainTemplate.gradle.");
-                        return false; //Stop here to avoid partial configuration
+                        //Fallback: insert into the first non-buildscript dependencies block
+                        var regex = new Regex(@"(?m)^(?<indent>\s*)dependencies\s*\{");
+                        if (regex.IsMatch(content))
+                        {
+                            content = regex.Replace(content, m => $"{m.Groups["indent"].Value}dependencies {{\n{newDepsBlock}", 1);
+                            modified = true;
+                        }
+                        else
+                        {
+                            Debug.LogWarning("[Solana SDK] Could not find '**DEPS**' placeholder or 'dependencies' block in mainTemplate.gradle.");
+                            return false; 
+                        }
                     }
                 }
 
@@ -253,8 +276,11 @@ configurations.all {{
         //Removes the resolution block using End Markers (Preferred) or Fallback Parsing
         private static string RemoveResolutionBlock(string content)
         {
-            //If we have the specific markers, use them for clean removal
-            if (content.Contains(ResolutionMarker) && content.Contains(ResolutionEndMarker))
+            int markerIndex = content.IndexOf(ResolutionMarker);
+            if (markerIndex < 0) return content;
+
+            //Try clean removal using End Marker (Preferred)
+            if (content.Contains(ResolutionEndMarker))
             {
                 var regex = new Regex(
                     $@"(?s)\s*{Regex.Escape(ResolutionMarker)}.*?{Regex.Escape(ResolutionEndMarker)}\s*"
@@ -262,15 +288,41 @@ configurations.all {{
                 return regex.Replace(content, "");
             }
 
-            //If only the start marker exists, remove just the line to reset
-            if (content.Contains(ResolutionMarker))
+            //Fallback: Brace Counting (For legacy/corrupt blocks missing end marker)
+            //Restored robust brace counting to prevent stale blocks
+            var configMatch = Regex.Match(content.Substring(markerIndex), @"configurations\.all\s*\{");
+            if (!configMatch.Success)
             {
-                //Fallback for legacy/corrupt blocks: Remove just the marker line to allow clean reinjection
-                return Regex.Replace(
-                    content,
-                    $@"(?m)^[ \t]*{Regex.Escape(ResolutionMarker)}[ \t]*\r?\n?",
-                    ""
-                );
+                // If only the marker line exists but the block is gone, remove the marker
+                return Regex.Replace(content, $@"(?m)^[ \t]*{Regex.Escape(ResolutionMarker)}[ \t]*\r?\n?", "");
+            }
+
+            int openBraceIndex = markerIndex + configMatch.Index + configMatch.Length - 1;
+            int depth = 0;
+            int closeBraceIndex = -1;
+            bool inLineComment = false;
+            bool inBlockComment = false;
+            bool inString = false;
+            char stringChar = ' ';
+
+            for (int i = openBraceIndex; i < content.Length; i++)
+            {
+                if (ShouldSkipForCommentOrString(content, ref i, ref inLineComment, ref inBlockComment, ref inString, ref stringChar)) continue;
+
+                char c = content[i];
+                if (c == '{') depth++;
+                else if (c == '}') depth--;
+
+                if (depth == 0)
+                {
+                    closeBraceIndex = i;
+                    break;
+                }
+            }
+
+            if (closeBraceIndex > 0)
+            {
+                return content.Remove(markerIndex, (closeBraceIndex - markerIndex) + 1);
             }
 
             return content;
@@ -366,7 +418,7 @@ configurations.all {{
                     Directory.CreateDirectory(backupDir);
 
                     //using timestamped backups to prevent overwriting previous states
-                    string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                    string timestamp = System.DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff");
                     string backupPath = Path.Combine(backupDir, $"mainTemplate.gradle.{timestamp}.bak");
                     
                     File.Copy(GradleTemplatePath, backupPath, true);

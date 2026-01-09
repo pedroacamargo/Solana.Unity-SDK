@@ -23,12 +23,12 @@ namespace Solana.Unity.SDK.Editor
         {
             //Only run this check once per Editor Session to avoid overhead on every reload.
             if (SessionState.GetBool(SessionKey, false)) return;
+            SessionState.SetBool(SessionKey, true);
             
             EditorApplication.delayCall += () => 
             {
                 //schedule check for next frame to avoid blocking editor initialization
                 CheckConfiguration(true);
-                SessionState.SetBool(SessionKey, true);
             };
         }
 
@@ -97,7 +97,6 @@ namespace Solana.Unity.SDK.Editor
                 string parcelableVersion = "1.1.1";
                 string guavaVersion = "31.1-android";
                 string coreVersion = "1.8.0";
-
                 string kotlinResolutionBlock = ""; //Empty on legacy versions
 #endif
 
@@ -124,7 +123,7 @@ configurations.all {{
 
                 bool modified = false;
 
-                //Sanatize and Validate
+                //Sanitize and Validate
                 if (content.Contains(DependencyMarker) || content.Contains(ResolutionMarker))
                 {
                    //Validate Dependencies
@@ -213,7 +212,7 @@ configurations.all {{
                     Directory.CreateDirectory(backupDir);
 
                     //using timestamped backups to prevent overwriting previous states
-                    string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
                     string backupPath = Path.Combine(backupDir, $"mainTemplate.gradle.{timestamp}.bak");
                     
                     File.Copy(GradleTemplatePath, backupPath, false);

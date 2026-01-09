@@ -11,7 +11,11 @@ namespace Solana.Unity.SDK.Editor
     public class AndroidGradleAutoConfig : IPreprocessBuildWithReport
     {
         public int callbackOrder => 0;
-        private const string GradleTemplatePath = "Assets/Plugins/Android/mainTemplate.gradle";
+        
+        //Using absolute paths to ensure CI/CD compatibility
+        private const string GradleTemplateRelativePath = "Assets/Plugins/Android/mainTemplate.gradle";
+        private static string ProjectRoot => Directory.GetParent(Application.dataPath).FullName;
+        private static string GradleTemplatePath => Path.Combine(ProjectRoot, GradleTemplateRelativePath);
         
         //Markers to identify our injections
         private const string DependencyMarker = "// [Solana.Unity-SDK] Dependencies";
@@ -80,13 +84,15 @@ namespace Solana.Unity.SDK.Editor
                 string browserVersion = "1.8.0";
                 string parcelableVersion = "1.2.1";
                 string guavaVersion = "33.5.0-android";
-                string coreVersion = "1.15.0";
+                string coreVersion = "1.13.1";
 
-                //force Kotlin 1.8.22 on Unity 6 to resolve duplicate class errors.
+                //Force Kotlin 1.8.22 and exclude redundant jdk7/jdk8 modules (they're included in kotlin-stdlib 1.8+)
                 string kotlinResolutionBlock = @"
-        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
-        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
-        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'";
+        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'";
+                string kotlinExcludeBlock = @"
+    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'";
+                string kotlinCheckRegex = @"force\s+['""]org\.jetbrains\.kotlin:kotlin-stdlib:1\.8\.22['""]";
 #else
                 //Unity 2022/2021 (Legacy Stable)
                 string browserVersion = "1.5.0";
@@ -94,6 +100,8 @@ namespace Solana.Unity.SDK.Editor
                 string guavaVersion = "31.1-android";
                 string coreVersion = "1.8.0";
                 string kotlinResolutionBlock = ""; //Empty on legacy versions
+                string kotlinExcludeBlock = ""; //Empty on legacy versions
+                string kotlinCheckRegex = ""; //No check needed on legacy
 #endif
 
                 //Explicit androidx.core dependency
@@ -110,7 +118,7 @@ namespace Solana.Unity.SDK.Editor
 
 {ResolutionMarker}
 configurations.all {{
-    exclude group: 'com.google.guava', module: 'listenablefuture'
+    exclude group: 'com.google.guava', module: 'listenablefuture'{kotlinExcludeBlock}
     resolutionStrategy {{
         force 'androidx.core:core:{coreVersion}'{kotlinResolutionBlock}
     }}
@@ -123,7 +131,8 @@ configurations.all {{
                 if (content.Contains(DependencyMarker) || content.Contains(ResolutionMarker))
                 {
                    //Validate Dependencies
-                   bool hasCorrectDeps = Regex.IsMatch(content, $@"implementation\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]");
+                   bool hasCorrectDeps = Regex.IsMatch(content, $@"force\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]") &&
+                                (string.IsNullOrEmpty(kotlinCheckRegex) || Regex.IsMatch(content, kotlinCheckRegex));
                    
                    //Validate Resolution Strategy (Check if it forces the correct Core version)
                    bool hasCorrectResolution = content.Contains(ResolutionMarker) && 
@@ -135,7 +144,7 @@ configurations.all {{
                        if (!CreateBackup()) return false;
                        
                        //Remove Old Dependencies
-                       var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s+implementation\s+['""][^'""]+['""]\s*)*");
+                       var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s*(?:implementation|//).+)*");
                        string sanitized = depsRegex.Replace(content, "");
                        content = sanitized;
                        
@@ -188,8 +197,15 @@ configurations.all {{
                     string tempPath = GradleTemplatePath + ".tmp";
                     File.WriteAllText(tempPath, content);
                     
-                    if (File.Exists(GradleTemplatePath)) File.Delete(GradleTemplatePath);
-                    File.Move(tempPath, GradleTemplatePath);
+                    if (File.Exists(GradleTemplatePath))
+                    {
+                        //Atomic replacement
+                        File.Replace(tempPath, GradleTemplatePath, null);
+                    }
+                    else
+                    {
+                        File.Move(tempPath, GradleTemplatePath);
+                    }
                     AssetDatabase.Refresh();
                     Debug.Log($"[Solana SDK] Updated 'mainTemplate.gradle' dependencies (Target: Core v{coreVersion}).");
                 }
@@ -208,19 +224,38 @@ configurations.all {{
             int markerIndex = content.IndexOf(ResolutionMarker);
             if (markerIndex < 0) return content;
 
-            // Find start of configurations.all block
+            //Find start of configurations.all block
             var configMatch = Regex.Match(content.Substring(markerIndex), @"configurations\.all\s*\{");
             if (!configMatch.Success) return content;
 
             int openBraceIndex = markerIndex + configMatch.Index + configMatch.Length - 1;
             int depth = 0;
             int closeBraceIndex = -1;
+            bool inLineComment = false;
 
-            // Scan forward to find matching closing brace
+            //Scan forward to find matching closing brace
             for (int i = openBraceIndex; i < content.Length; i++)
             {
-                if (content[i] == '{') depth++;
-                else if (content[i] == '}') depth--;
+                char c = content[i];
+
+                //Handle Comments
+                if (!inLineComment && c == '/' && i + 1 < content.Length && content[i+1] == '/')
+                {
+                    inLineComment = true;
+                    i++; 
+                    continue;
+
+                }
+                if (inLineComment && (c == '\n' || c == '\r'))
+                {
+                    inLineComment = false;
+                    continue;
+                }
+                if (inLineComment) continue;
+
+                //Handle Braces
+                if (c == '{') depth++;
+                else if (c == '}') depth--;
 
                 if (depth == 0)
                 {
@@ -242,10 +277,28 @@ configurations.all {{
         private static bool ValidateBraces(string content)
         {
             int depth = 0;
-            foreach (char c in content)
+            bool inLineComment = false;
+
+            for (int i = 0; i < content.Length; i++)
             {
+                char c = content[i];
+                
+                if (!inLineComment && c == '/' && i + 1 < content.Length && content[i+1] == '/')
+                {
+                    inLineComment = true;
+                    i++;
+                    continue;
+                }
+                if (inLineComment && (c == '\n' || c == '\r'))
+                {
+                    inLineComment = false;
+                    continue;
+                }
+                if (inLineComment) continue;
+
                 if (c == '{') depth++;
                 else if (c == '}') depth--;
+                
                 if (depth < 0) return false;
             }
             return depth == 0;
@@ -258,8 +311,7 @@ configurations.all {{
                 if (File.Exists(GradleTemplatePath))
                 {
                     //Creating backups in Library/ to avoid polluting Assets/
-                    string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-                    string backupDir = Path.Combine(projectRoot, "Library", "SolanaSdk", "GradleBackups");
+                    string backupDir = Path.Combine(ProjectRoot, "Library", "SolanaSdk", "GradleBackups");
                     Directory.CreateDirectory(backupDir);
 
                     //using timestamped backups to prevent overwriting previous states

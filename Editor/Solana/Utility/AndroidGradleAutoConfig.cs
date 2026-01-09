@@ -119,7 +119,7 @@ configurations.all {{
                    if (!hasCorrectDeps)
                    {
                        //Verify sanitization actually works before proceeding
-                       CreateBackup();
+                       if(!CreateBackup()) return;
                        
                        //Regex to strip old Solana Dependency Block (matches marker --> last known lib)
                        var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}[\s\S]*?com\.google\.guava:listenablefuture[^\n]*");
@@ -150,7 +150,10 @@ configurations.all {{
                 //Inject Dependencies
                 if (!content.Contains(DependencyMarker)) 
                 {
-                    if (!modified) CreateBackup(); 
+                    if (!modified)
+                    {
+                        if(!CreateBackup()) return;
+                    } 
                     
                     var regex = new Regex(@"dependencies\s*\{");
                     if (regex.IsMatch(content))
@@ -168,7 +171,10 @@ configurations.all {{
                 //Inject Resolution Strategy
                 if (!content.Contains(ResolutionMarker))
                 {
-                    if (!modified) CreateBackup();
+                    if (!modified)
+                    {
+                        if(!CreateBackup()) return;
+                    } 
                     content = content.TrimEnd() + newResolutionBlock;
                     modified = true;
                 }
@@ -186,7 +192,7 @@ configurations.all {{
             }
         }
 
-        private static void CreateBackup()
+        private static bool CreateBackup()
         {
             try
             {
@@ -198,10 +204,12 @@ configurations.all {{
                         File.Copy(GradleTemplatePath, backupPath, false);
                     }
                 }
+                return true;
             }
             catch (System.Exception e)
             {
-                Debug.LogWarning($"[Solana SDK] Backup failed: {e.Message}");
+                Debug.LogWarning($"[Solana SDK] Backup failed: {e.Message}, aborting auto config to protect original file");
+                return false;
             }
         }
     }

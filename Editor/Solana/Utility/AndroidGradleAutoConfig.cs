@@ -14,13 +14,29 @@ namespace Solana.Unity.SDK.Editor
         
         //Using absolute paths to ensure CI/CD compatibility
         private const string GradleTemplateRelativePath = "Assets/Plugins/Android/mainTemplate.gradle";
-        private static string ProjectRoot => Directory.GetParent(Application.dataPath).FullName;
+        private static string _projectRoot;
+        private static string ProjectRoot 
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(_projectRoot))
+                {
+                    // Fallback to dataPath if parent is null, then normalize
+                    var parent = Directory.GetParent(Application.dataPath);
+                    string rawPath = parent != null ? parent.FullName : Application.dataPath;
+                    _projectRoot = Path.GetFullPath(rawPath);
+                }
+                return _projectRoot;
+            }
+        }
         private static string GradleTemplatePath => Path.Combine(ProjectRoot, GradleTemplateRelativePath);
         
         //Markers to identify our injections
         private const string DependencyMarker = "// [Solana.Unity-SDK] Dependencies";
         private const string DependencyEndMarker = "// [Solana.Unity-SDK] End Dependencies";
         private const string ResolutionMarker = "// [Solana.Unity-SDK] Conflict Resolution";
+        private const string ResolutionEndMarker = "// [Solana.Unity-SDK] End Conflict Resolution";
+        
         private const string SessionKey = "SolanaGradleChecked";
 
         //Run on Editor Load to warn the user immediately if setup is missing
@@ -42,7 +58,7 @@ namespace Solana.Unity.SDK.Editor
         [MenuItem("Solana/Fix Android Dependencies")]
         public static void RunManualCheck()
         {
-            CheckConfiguration(true);
+            CheckConfiguration(false);
         }
 
         //Run right before the build starts to ensure we don't fail midway
@@ -65,7 +81,7 @@ namespace Solana.Unity.SDK.Editor
                 Debug.LogError($"[Solana SDK] 'mainTemplate.gradle' not found at {GradleTemplatePath}.\n" +
                                "1. Go to: Edit -> Project Settings -> Player -> Android -> Publishing Settings\n" +
                                "2. Check the box: 'Custom Main Gradle Template'\n" +
-                               "3. Then try Building again or click 'Solana -> Fix Android Dependencies'.");
+                               "3. Then try Building again or click 'Solana/Fix Android Dependencies (Force)'.");
                 return false;
             }
 
@@ -86,7 +102,6 @@ namespace Solana.Unity.SDK.Editor
                 string parcelableVersion = "1.2.1";
                 string guavaVersion = "33.5.0-android";
                 string coreVersion = "1.13.1";
-
                 string kotlinExcludeBlock = @"
     exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
     exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'";
@@ -119,6 +134,7 @@ configurations.all {{
         force 'androidx.core:core:{coreVersion}'
     }}
 }}
+{ResolutionEndMarker}
 ";
 
                 bool modified = false;
@@ -138,12 +154,11 @@ configurations.all {{
                     {
                         if (!CreateBackup()) return false;
                         
-                        //Remove Old Dependencies (only our marked region)
+                        //Remove Old Dependencies
                         var depsRegex = new Regex(
                             $@"(?s)\s*{Regex.Escape(DependencyMarker)}.*?{Regex.Escape(DependencyEndMarker)}\s*"
                         );
-                        string sanitized = depsRegex.Replace(content, "");
-                        content = sanitized;
+                        content = depsRegex.Replace(content, "");
                         
                         //Remove Old Resolution Block
                         content = RemoveResolutionBlock(content);
@@ -171,12 +186,15 @@ configurations.all {{
                 }
 
                 //Inject Resolution Strategy
-                if (!content.Contains(ResolutionMarker))
+                if (!content.Contains(ResolutionMarker) || !content.Contains(ResolutionEndMarker))
                 {
                     if (!modified)
                     {
                         if(!CreateBackup()) return false;
                     } 
+                    
+                    content = RemoveResolutionBlock(content);
+                    
                     content = content.TrimEnd() + newResolutionBlock;
                     modified = true;
                 }
@@ -203,7 +221,10 @@ configurations.all {{
                     {
                         File.Move(tempPath, GradleTemplatePath);
                     }
-                    AssetDatabase.Refresh();
+                    if (!BuildPipeline.isBuildingPlayer)
+                    {
+                        AssetDatabase.Refresh();
+                    }
                     Debug.Log($"[Solana SDK] Updated 'mainTemplate.gradle' dependencies (Target: Core v{coreVersion}).");
                 }
                 return true;
@@ -215,55 +236,21 @@ configurations.all {{
             }
         }
 
-        private static bool ShouldSkipForComment(string content, ref int i, ref bool inLineComment, ref bool inBlockComment)
+         //Removes the resolution block by counting braces
+        private static string RemoveResolutionBlock(string content)
         {
-            char c = content[i];
-
-            //Check for line comment start (//)
-            if (!inLineComment && !inBlockComment && c == '/' && i + 1 < content.Length && content[i+1] == '/')
+            //If we have the specific markers, use them for clean removal
+            if (content.Contains(ResolutionMarker) && content.Contains(ResolutionEndMarker))
             {
-                inLineComment = true;
-                i++;
-                return true;
-            }
-            
-            //Check for line comment end (New Line)
-            if (inLineComment && (c == '\n' || c == '\r'))
-            {
-                inLineComment = false;
-                return true;
-            }
-            
-            //Check for block comment start (/*)
-            if (!inBlockComment && !inLineComment && c == '/' && i + 1 < content.Length && content[i+1] == '*')
-            {
-                inBlockComment = true;
-                i++;
-                return true;
-            }
-            
-            //Check for block comment end (*/)
-            if (inBlockComment && c == '*' && i + 1 < content.Length && content[i+1] == '/')
-            {
-                inBlockComment = false;
-                i++;
-                return true;
+                var regex = new Regex(
+                    $@"(?s)\s*{Regex.Escape(ResolutionMarker)}.*?{Regex.Escape(ResolutionEndMarker)}\s*"
+                );
+                return regex.Replace(content, "");
             }
 
-            return inLineComment || inBlockComment;
-        }
-
-        //Removes the resolution block by counting braces
-       private static string RemoveResolutionBlock(string content)
-        {
-            int markerIndex = content.IndexOf(ResolutionMarker);
-            if (markerIndex < 0) return content;
-
-            //Find start of configurations.all block
-            var configMatch = Regex.Match(content.Substring(markerIndex), @"configurations\.all\s*\{");
-            if (!configMatch.Success)
+            //If only the start marker exists, remove just the line to reset
+            if (content.Contains(ResolutionMarker))
             {
-                //Remove the marker line to allow clean reinjection
                 return Regex.Replace(
                     content,
                     $@"(?m)^[ \t]*{Regex.Escape(ResolutionMarker)}[ \t]*\r?\n?",
@@ -271,35 +258,53 @@ configurations.all {{
                 );
             }
 
-            int openBraceIndex = markerIndex + configMatch.Index + configMatch.Length - 1;
-            int depth = 0;
-            int closeBraceIndex = -1;
-            bool inLineComment = false;
-            bool inBlockComment = false;
+            return content;
+        }
 
-            //Scan forward to find matching closing brace
-            for (int i = openBraceIndex; i < content.Length; i++)
+        private static bool ShouldSkipForCommentOrString(string content, ref int i, ref bool inLineComment, ref bool inBlockComment, ref bool inString, ref char stringChar)
+        {
+            char c = content[i];
+
+            //Handle String Literals (Ignoring braces inside quotes)
+            if (!inLineComment && !inBlockComment)
             {
-                if (ShouldSkipForComment(content, ref i, ref inLineComment, ref inBlockComment)) continue;
-
-                char c = content[i];
-                if (c == '{') depth++;
-                else if (c == '}') depth--;
-
-                if (depth == 0)
+                if (inString)
                 {
-                    closeBraceIndex = i;
-                    break;
+                    if (c == stringChar)
+                    {
+                        //Check for escape (e.g. \")
+                        bool isEscaped = (i > 0 && content[i - 1] == '\\');
+                        if (!isEscaped) inString = false;
+                    }
+                    return true; 
+                }
+                else if (c == '"' || c == '\'')
+                {
+                    inString = true;
+                    stringChar = c;
+                    return true;
                 }
             }
 
-            if (closeBraceIndex > 0)
+            //Handle Comments
+            if (!inString && !inLineComment && !inBlockComment && c == '/' && i + 1 < content.Length && content[i+1] == '/')
             {
-                //Remove from marker up to closing brace
-                return content.Remove(markerIndex, (closeBraceIndex - markerIndex) + 1);
+                inLineComment = true; i++; return true;
+            }
+            if (inLineComment && (c == '\n' || c == '\r'))
+            {
+                inLineComment = false; return true;
+            }
+            if (!inString && !inBlockComment && !inLineComment && c == '/' && i + 1 < content.Length && content[i+1] == '*')
+            {
+                inBlockComment = true; i++; return true;
+            }
+            if (inBlockComment && c == '*' && i + 1 < content.Length && content[i+1] == '/')
+            {
+                inBlockComment = false; i++; return true;
             }
 
-            return content;
+            return inLineComment || inBlockComment || inString;
         }
 
         //Simple check to ensure the file isn't broken
@@ -308,10 +313,13 @@ configurations.all {{
             int depth = 0;
             bool inLineComment = false;
             bool inBlockComment = false;
+            bool inString = false;
+            char stringChar = ' ';
 
             for (int i = 0; i < content.Length; i++)
             {
-                if (ShouldSkipForComment(content, ref i, ref inLineComment, ref inBlockComment)) continue;
+                if (ShouldSkipForCommentOrString(content, ref i, ref inLineComment, ref inBlockComment, ref inString, ref stringChar)) 
+                    continue;
 
                 char c = content[i];
                 if (c == '{') depth++;

@@ -98,8 +98,8 @@ namespace Solana.Unity.SDK.Editor
 
 {ResolutionMarker}
 configurations.all {{
+    exclude group: 'com.google.guava', module: 'listenablefuture'
     resolutionStrategy {{
-        exclude group: 'com.google.guava', module: 'listenablefuture'
         force 'androidx.core:core:{coreVersion}'
     }}
 }}
@@ -121,8 +121,8 @@ configurations.all {{
                        //Verify sanitization actually works before proceeding
                        if(!CreateBackup()) return;
                        
-                       //Regex to strip old Solana Dependency Block (matches marker --> last known lib)
-                       var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}[\s\S]*?com\.google\.guava:listenablefuture[^\n]*");
+                       //Regex to strip old Solana Dependency Block (matches marker through consecutive implementation lines)
+                       var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s+implementation\s+'[^']+'\s*)+");
                        string sanitized = depsRegex.Replace(content, "");
                        
                        if (sanitized == content)
@@ -134,11 +134,9 @@ configurations.all {{
                        
                        if (content.Contains(ResolutionMarker))
                        {
-                           int resIndex = content.LastIndexOf(ResolutionMarker);
-                           if (resIndex >= 0) 
-                           {
-                               content = content.Substring(0, resIndex).TrimEnd();
-                           }
+                           //Match the resolution block from marker to closing braces
+                          var resRegex = new Regex($@"\s*{Regex.Escape(ResolutionMarker)}[\s\S]*?configurations\.all\s*\{{[\s\S]*?\}}\s*\}}");
+                          content = resRegex.Replace(content, "");
                        }
                        
                        modified = true;

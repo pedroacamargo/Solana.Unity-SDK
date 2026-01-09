@@ -142,10 +142,10 @@ configurations.all {{
                 //Sanitize and Validate
                 if (content.Contains(DependencyMarker) || content.Contains(ResolutionMarker))
                 {
-                    //Validate Dependencies (Must look for 'implementation')
-                    bool hasCorrectDeps = Regex.IsMatch(content, $@"implementation\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]");
-                    
-                    //Validate Resolution Strategy (Must look for 'force')
+                    bool hasCorrectDeps = Regex.IsMatch(content, $@"implementation\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]") &&
+                                          Regex.IsMatch(content, $@"implementation\s+['""]androidx\.browser:browser:{Regex.Escape(browserVersion)}['""]") &&
+                                          Regex.IsMatch(content, $@"implementation\s+['""]com\.google\.guava:guava:{Regex.Escape(guavaVersion)}['""]");
+
                     bool hasCorrectResolution = content.Contains(ResolutionMarker) && 
                                                 Regex.IsMatch(content, $@"force\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]");
                                         
@@ -155,9 +155,11 @@ configurations.all {{
                         if (!CreateBackup()) return false;
                         
                         //Remove Old Dependencies
-                        var depsRegex = new Regex(
-                            $@"(?s)\s*{Regex.Escape(DependencyMarker)}.*?{Regex.Escape(DependencyEndMarker)}\s*"
-                        );
+                        string cleanDepsPattern = content.Contains(DependencyEndMarker) 
+                            ? $@"(?s)\s*{Regex.Escape(DependencyMarker)}.*?{Regex.Escape(DependencyEndMarker)}\s*" 
+                            : $@"(?s)\s*{Regex.Escape(DependencyMarker)}.*?(?=\n\s*//|$)"; // Fallback: Read until next comment or EOF
+
+                        var depsRegex = new Regex(cleanDepsPattern);
                         content = depsRegex.Replace(content, "");
                         
                         //Remove Old Resolution Block
@@ -236,7 +238,7 @@ configurations.all {{
             }
         }
 
-         //Removes the resolution block by counting braces
+        //Removes the resolution block using End Markers (Preferred) or Fallback Parsing
         private static string RemoveResolutionBlock(string content)
         {
             //If we have the specific markers, use them for clean removal
@@ -251,6 +253,7 @@ configurations.all {{
             //If only the start marker exists, remove just the line to reset
             if (content.Contains(ResolutionMarker))
             {
+                //Fallback for legacy/corrupt blocks: Remove just the marker line to allow clean reinjection
                 return Regex.Replace(
                     content,
                     $@"(?m)^[ \t]*{Regex.Escape(ResolutionMarker)}[ \t]*\r?\n?",
@@ -261,6 +264,8 @@ configurations.all {{
             return content;
         }
 
+        //Supporting full Groovy DSL (triple quotes, slashy strings) is out of scope. 
+        //the standard quotes and comments covers >99% of Unity templates.
         private static bool ShouldSkipForCommentOrString(string content, ref int i, ref bool inLineComment, ref bool inBlockComment, ref bool inString, ref char stringChar)
         {
             char c = content[i];

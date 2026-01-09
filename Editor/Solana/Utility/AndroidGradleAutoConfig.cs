@@ -43,22 +43,26 @@ namespace Solana.Unity.SDK.Editor
         [InitializeOnLoadMethod]
         private static void OnEditorLoad()
         {
+            //Unity clears static events on domain reload, re-subscribe every time
+            //InitializeOnLoadMethod runs, ignoring the SessionKey check.
+            EditorUserBuildSettings.activeBuildTargetChanged -= OnBuildTargetChanged;
+            EditorUserBuildSettings.activeBuildTargetChanged += OnBuildTargetChanged;
+
             //Only run this check once per Editor Session to avoid overhead on every reload.
             if (SessionState.GetBool(SessionKey, false)) return;
             SessionState.SetBool(SessionKey, true);
-            
-            //Re-check if user switches build target to Android later
-            EditorUserBuildSettings.activeBuildTargetChanged += () =>
-            {
-                if (EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android)
-                    CheckConfiguration(true);
-            };
 
             EditorApplication.delayCall += () => 
             {
                 //schedule check for next frame to avoid blocking editor initialization
                 CheckConfiguration(true);
             };
+        }
+
+        private static void OnBuildTargetChanged()
+        {
+            if (EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android)
+                CheckConfiguration(true);
         }
 
         //Menu Item for manual execution
@@ -320,7 +324,7 @@ configurations.all {{
                 }
             }
 
-            if (closeBraceIndex > 0)
+            if (closeBraceIndex != -1)
             {
                 return content.Remove(markerIndex, (closeBraceIndex - markerIndex) + 1);
             }

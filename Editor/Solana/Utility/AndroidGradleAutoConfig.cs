@@ -212,17 +212,29 @@ configurations.all {{
 
                     //Atomic Write
                     string tempPath = GradleTemplatePath + ".tmp";
-                    File.WriteAllText(tempPath, content);
+                    try 
+                    {
+                        File.WriteAllText(tempPath, content);
+                        
+                        if (File.Exists(GradleTemplatePath))
+                        {
+                            File.Replace(tempPath, GradleTemplatePath, null);
+                        }
+                        else
+                        {
+                            File.Move(tempPath, GradleTemplatePath);
+                        }
+                    }
+                    finally
+                    {
+                        //Ensure temp file is cleaned up even if Replace/Move fails
+                        if (File.Exists(tempPath)) 
+                        {
+                            try { File.Delete(tempPath); } catch {} 
+                        }
+                    }
                     
-                    if (File.Exists(GradleTemplatePath))
-                    {
-                        //Atomic replacement
-                        File.Replace(tempPath, GradleTemplatePath, null);
-                    }
-                    else
-                    {
-                        File.Move(tempPath, GradleTemplatePath);
-                    }
+                    //Only refresh if we are NOT building the player to avoid build pipeline stalls
                     if (!BuildPipeline.isBuildingPlayer)
                     {
                         AssetDatabase.Refresh();

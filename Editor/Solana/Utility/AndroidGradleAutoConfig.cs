@@ -19,6 +19,7 @@ namespace Solana.Unity.SDK.Editor
         
         //Markers to identify our injections
         private const string DependencyMarker = "// [Solana.Unity-SDK] Dependencies";
+        private const string DependencyEndMarker = "// [Solana.Unity-SDK] End Dependencies";
         private const string ResolutionMarker = "// [Solana.Unity-SDK] Conflict Resolution";
         private const string SessionKey = "SolanaGradleChecked";
 
@@ -86,22 +87,16 @@ namespace Solana.Unity.SDK.Editor
                 string guavaVersion = "33.5.0-android";
                 string coreVersion = "1.13.1";
 
-                //Force Kotlin 1.8.22 and exclude redundant modules
-                string kotlinResolutionBlock = @"
-        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'";
                 string kotlinExcludeBlock = @"
     exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
     exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'";
-                string kotlinCheckRegex = @"force\s+['""]org\.jetbrains\.kotlin:kotlin-stdlib:1\.8\.22['""]";
 #else
                 //Unity 2022/2021 (Legacy Stable)
                 string browserVersion = "1.5.0";
                 string parcelableVersion = "1.1.1";
                 string guavaVersion = "31.1-android";
                 string coreVersion = "1.8.0";
-                string kotlinResolutionBlock = ""; //Empty on legacy versions
                 string kotlinExcludeBlock = ""; //Empty on legacy versions
-                string kotlinCheckRegex = ""; //No check needed on legacy
 #endif
 
                 //Explicit androidx.core dependency
@@ -112,6 +107,7 @@ namespace Solana.Unity.SDK.Editor
     implementation 'androidx.versionedparcelable:versionedparcelable:{parcelableVersion}'
     implementation 'com.google.guava:guava:{guavaVersion}'
     implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
+    {DependencyEndMarker}
 ";
 
                 string newResolutionBlock = $@"
@@ -120,7 +116,7 @@ namespace Solana.Unity.SDK.Editor
 configurations.all {{
     exclude group: 'com.google.guava', module: 'listenablefuture'{kotlinExcludeBlock}
     resolutionStrategy {{
-        force 'androidx.core:core:{coreVersion}'{kotlinResolutionBlock}
+        force 'androidx.core:core:{coreVersion}'
     }}
 }}
 ";
@@ -133,18 +129,19 @@ configurations.all {{
                     //Validate Dependencies (Must look for 'implementation')
                     bool hasCorrectDeps = Regex.IsMatch(content, $@"implementation\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]");
                     
-                    //Validate Resolution Strategy (Must look for 'force' AND Kotlin fix)
+                    //Validate Resolution Strategy (Must look for 'force')
                     bool hasCorrectResolution = content.Contains(ResolutionMarker) && 
-                                                Regex.IsMatch(content, $@"force\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]") &&
-                                                (string.IsNullOrEmpty(kotlinCheckRegex) || Regex.IsMatch(content, kotlinCheckRegex));
+                                                Regex.IsMatch(content, $@"force\s+['""]androidx\.core:core:{Regex.Escape(coreVersion)}['""]");
                                         
                     //If either is wrong, we must regenerate
                     if (!hasCorrectDeps || !hasCorrectResolution)
                     {
                         if (!CreateBackup()) return false;
                         
-                        //Remove Old Dependencies
-                        var depsRegex = new Regex($@"\s*{Regex.Escape(DependencyMarker)}(?:\s*(?:implementation|//).+)*");
+                        //Remove Old Dependencies (only our marked region)
+                        var depsRegex = new Regex(
+                            $@"(?s)\s*{Regex.Escape(DependencyMarker)}.*?{Regex.Escape(DependencyEndMarker)}\s*"
+                        );
                         string sanitized = depsRegex.Replace(content, "");
                         content = sanitized;
                         
@@ -156,7 +153,7 @@ configurations.all {{
                 }
                 
                 //Inject Dependencies
-                if (!content.Contains(DependencyMarker)) 
+                if (!content.Contains(DependencyMarker) || !content.Contains(DependencyEndMarker)) 
                 {
                     if (!modified) { if(!CreateBackup()) return false; } 
                     
@@ -264,7 +261,15 @@ configurations.all {{
 
             //Find start of configurations.all block
             var configMatch = Regex.Match(content.Substring(markerIndex), @"configurations\.all\s*\{");
-            if (!configMatch.Success) return content;
+            if (!configMatch.Success)
+            {
+                //Remove the marker line to allow clean reinjection
+                return Regex.Replace(
+                    content,
+                    $@"(?m)^[ \t]*{Regex.Escape(ResolutionMarker)}[ \t]*\r?\n?",
+                    ""
+                );
+            }
 
             int openBraceIndex = markerIndex + configMatch.Index + configMatch.Length - 1;
             int depth = 0;
@@ -302,6 +307,7 @@ configurations.all {{
         {
             int depth = 0;
             bool inLineComment = false;
+            bool inBlockComment = false;
 
             for (int i = 0; i < content.Length; i++)
             {
